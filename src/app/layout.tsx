@@ -33,6 +33,7 @@ export default function RootLayout({
             <NavItem href="/ops" icon="⚙️" label="Operations" />
             <NavItem href="/consulting" icon="📊" label="Consulting" />
             <NavItem href="/admin" icon="🔧" label="Admin" />
+            <NavItem href="/admin/settings" icon="⚙️" label="Settings" />
             <NavItem href="/admin/documents" icon="📚" label="Knowledge Base" />
           </nav>
           <div className="p-4 border-t border-white/10">
