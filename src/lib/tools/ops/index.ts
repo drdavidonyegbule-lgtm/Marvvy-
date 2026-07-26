@@ -180,18 +180,35 @@ export const generateReport = tool({
     let data: any = {};
     switch (type) {
       case 'pipeline': {
-        const deals = db.prepare('SELECT stage, COUNT(*) as count, SUM(value) as value FROM deals GROUP BY stage').all();
-        data = { deals, period };
+        const allDeals = db.prepare('SELECT * FROM deals').all() as any[];
+        const groups: Record<string, { count: number; value: number }> = {};
+        for (const d of allDeals) {
+          const s = d.stage || 'unknown';
+          if (!groups[s]) groups[s] = { count: 0, value: 0 };
+          groups[s].count++;
+          groups[s].value += Number(d.value) || 0;
+        }
+        data = { deals: Object.entries(groups).map(([k, v]) => ({ stage: k, ...v })), period };
         break;
       }
       case 'tasks': {
-        const tasks = db.prepare("SELECT status, COUNT(*) as count FROM tasks GROUP BY status").all();
-        data = { tasks, period };
+        const allTasks = db.prepare('SELECT * FROM tasks').all() as any[];
+        const groups: Record<string, number> = {};
+        for (const t of allTasks) {
+          const s = t.status || 'unknown';
+          groups[s] = (groups[s] || 0) + 1;
+        }
+        data = { tasks: Object.entries(groups).map(([k, v]) => ({ status: k, count: v })), period };
         break;
       }
       case 'activity': {
-        const msgs = db.prepare("SELECT channel_type, COUNT(*) as count FROM messages GROUP BY channel_type").all();
-        data = { messagesByChannel: msgs, period };
+        const allMsgs = db.prepare('SELECT * FROM messages').all() as any[];
+        const groups: Record<string, number> = {};
+        for (const m of allMsgs) {
+          const ch = m.channel_type || 'unknown';
+          groups[ch] = (groups[ch] || 0) + 1;
+        }
+        data = { messagesByChannel: Object.entries(groups).map(([k, v]) => ({ channel_type: k, count: v })), period };
         break;
       }
       default:

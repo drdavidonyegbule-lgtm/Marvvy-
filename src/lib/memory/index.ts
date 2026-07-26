@@ -1,60 +1,44 @@
 import { getDb } from '@/lib/db/schema';
 
 /**
- * Memory Manager for Marvvy
- *
- * Layer 1: Working Memory — active conversation context (handled by AI SDK message history)
- * Layer 2: Short-Term Memory — recent interactions from DB (30 days)
- * Layer 3: Long-Term Memory — important events stored as agent_memories
- * Layer 4: Episodic Memory — key events and decisions
+ * Memory Manager for Marvvy (4-layer memory system).
+ * Uses simple queries compatible with the JSON file store.
  */
-
-export interface MemoryContext {
-  recentConversations: string[];
-  keyMemories: string[];
-  preferences: Record<string, string>;
-}
 
 export function getMemoryContext(customerId: string): string {
   const db = getDb();
 
-  // Get recent conversations
-  const recentConvs = db
-    .prepare(
-      `SELECT c.id, c.subject, c.status, COUNT(m.id) as message_count
-       FROM conversations c
-       LEFT JOIN messages m ON m.conversation_id = c.id
-       WHERE c.customer_id = ?
-       GROUP BY c.id
-       ORDER BY c.updated_at DESC
-       LIMIT 5`
-    )
-    .all(customerId) as any[];
+  // Recent messages across all this customer's conversations
+  const allMessages = db
+    .prepare('SELECT * FROM messages ORDER BY created_at DESC')
+    .all();
 
-  // Get key episodic memories
+  const recentMessages = (allMessages as any[])
+    .filter((m: any) => {
+      const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(m.conversation_id) as any;
+      return conv?.customer_id === customerId;
+    })
+    .slice(0, 15);
+
+  // Key episodic memories
   const memories = db
-    .prepare(
-      `SELECT event_type, summary, importance, created_at
-       FROM agent_memories
-       WHERE customer_id = ?
-       ORDER BY importance DESC, created_at DESC
-       LIMIT 10`
-    )
+    .prepare('SELECT * FROM agent_memories WHERE customer_id = ? ORDER BY importance DESC')
     .all(customerId) as any[];
 
-  // Get recent messages for context
-  const recentMessages = db
-    .prepare(
-      `SELECT m.content, m.direction, m.created_at
-       FROM messages m
-       JOIN conversations c ON m.conversation_id = c.id
-       WHERE c.customer_id = ?
-       ORDER BY m.created_at DESC
-       LIMIT 10`
-    )
+  const recentMemories = (memories || [])
+    .sort((a: any, b: any) => (b.importance || 0) - (a.importance || 0))
+    .slice(0, 10);
+
+  // Recent conversations
+  const allConvs = db
+    .prepare('SELECT * FROM conversations WHERE customer_id = ?')
     .all(customerId) as any[];
 
-  // Get customer profile
+  const recentConvs = (allConvs || [])
+    .sort((a: any, b: any) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))
+    .slice(0, 5);
+
+  // Customer profile
   const customer = db
     .prepare('SELECT * FROM customers WHERE id = ?')
     .get(customerId) as any;
@@ -71,25 +55,25 @@ export function getMemoryContext(customerId: string): string {
     if (customer.tags) context += `Tags: ${customer.tags}\n`;
   }
 
-  if (memories.length > 0) {
-    context += `\n## Key Memories (Episodic)\n`;
-    memories.forEach((m: any) => {
-      context += `- [${m.event_type}] ${m.summary} (importance: ${m.importance})\n`;
+  if (recentMemories.length > 0) {
+    context += `\n## Key Memories\n`;
+    recentMemories.forEach((m: any) => {
+      context += `- [${m.event_type}] ${m.summary}\n`;
     });
   }
 
   if (recentConvs.length > 0) {
     context += `\n## Recent Conversations\n`;
     recentConvs.forEach((c: any) => {
-      context += `- "${c.subject}" (${c.status}, ${c.message_count} messages)\n`;
+      context += `- "${c.subject}" (status: ${c.status})\n`;
     });
   }
 
   if (recentMessages.length > 0) {
-    context += `\n## Recent Messages (most recent first)\n`;
-    recentMessages.reverse().forEach((m: any) => {
-      const prefix = m.direction === 'inbound' ? 'User' : 'Marvvy';
-      context += `- [${prefix}]: ${m.content?.substring(0, 200)}\n`;
+    context += `\n## Recent Messages\n`;
+    recentMessages.reverse().slice(-8).forEach((m: any) => {
+      const prefix = m.direction === 'inbound' ? 'Client' : 'Marvvy';
+      context += `- [${prefix}]: ${String(m.content || '').substring(0, 200)}\n`;
     });
   }
 
@@ -110,11 +94,4 @@ export function storeMemory(params: {
     `INSERT INTO agent_memories (id, customer_id, event_type, summary, importance)
      VALUES (?, ?, ?, ?, ?)`
   ).run(uuid(), params.customerId, params.eventType, params.summary, params.importance || 0.5);
-}
-
-export function forgetOldMemories(daysThreshold: number = 90) {
-  const db = getDb();
-  db.prepare(
-    `DELETE FROM agent_memories WHERE importance < 0.3 AND created_at < datetime('now', ?))`
-  ).run(`-${daysThreshold} days`);
 }

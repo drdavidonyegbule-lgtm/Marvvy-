@@ -131,8 +131,9 @@ export const qualifyLead = tool({
       db.prepare(`UPDATE leads SET ${updates.join(', ')} WHERE id = ?`).run(...values, leadId);
     }
     if (notes) {
-      db.prepare('INSERT INTO agent_memories (id, customer_id, event_type, summary) VALUES (?, (SELECT customer_id FROM leads WHERE id = ?), ?, ?)')
-        .run(uuid(), leadId, 'lead_qualification', notes);
+      const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId) as any;
+      db.prepare('INSERT INTO agent_memories (id, customer_id, event_type, summary) VALUES (?, ?, ?, ?)')
+        .run(uuid(), lead?.customer_id || null, 'lead_qualification', notes);
     }
     return { lead: db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId) };
   },
@@ -204,12 +205,31 @@ export const getPipeline = tool({
   inputSchema: z.object({}),
   execute: async () => {
     const db = getDb();
-    const stages = db.prepare(
-      `SELECT stage, COUNT(*) as count, SUM(value) as total_value, AVG(probability) as avg_probability
-       FROM deals GROUP BY stage ORDER BY total_value DESC`
-    ).all();
-    const totalValue = (stages as any[]).reduce((sum: number, s: any) => sum + (s.total_value || 0), 0);
-    const totalDeals = (stages as any[]).reduce((sum: number, s: any) => sum + s.count, 0);
+    const allDeals = db.prepare('SELECT * FROM deals').all() as any[];
+
+    // Aggregate by stage in JS
+    const stageMap: Record<string, { count: number; total_value: number; probabilities: number[] }> = {};
+    for (const deal of allDeals) {
+      const s = deal.stage || 'unknown';
+      if (!stageMap[s]) stageMap[s] = { count: 0, total_value: 0, probabilities: [] };
+      stageMap[s].count++;
+      stageMap[s].total_value += Number(deal.value) || 0;
+      stageMap[s].probabilities.push(Number(deal.probability) || 0);
+    }
+
+    const stages = Object.entries(stageMap)
+      .map(([stage, data]) => ({
+        stage,
+        count: data.count,
+        total_value: data.total_value,
+        avg_probability: data.probabilities.length > 0
+          ? Math.round(data.probabilities.reduce((a, b) => a + b, 0) / data.probabilities.length)
+          : 0,
+      }))
+      .sort((a, b) => b.total_value - a.total_value);
+
+    const totalValue = stages.reduce((sum, s) => sum + s.total_value, 0);
+    const totalDeals = stages.reduce((sum, s) => sum + s.count, 0);
     return { stages, totalValue, totalDeals };
   },
 });
@@ -226,10 +246,11 @@ export const scheduleFollowup = tool({
     const taskId = uuid();
     const contact = db.prepare('SELECT name FROM customers WHERE id = ?').get(contactId) as any;
     const title = `Follow up with ${contact?.name || 'contact'}: ${reason || 'Check-in'}`;
+    const dueDate = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 10);
     db.prepare(
       `INSERT INTO tasks (id, title, description, status, priority, due_date)
-       VALUES (?, ?, ?, 'pending', 3, datetime('now', '+2 days'))`
-    ).run(taskId, title, `Trigger: ${trigger}. ${reason || ''}`);
+       VALUES (?, ?, ?, 'pending', 3, ?)`
+    ).run(taskId, title, `Trigger: ${trigger}. ${reason || ''}`, dueDate);
     db.prepare(
       'INSERT INTO agent_memories (id, customer_id, event_type, summary) VALUES (?, ?, ?, ?)'
     ).run(uuid(), contactId, 'followup_scheduled', `Followup: ${trigger} - ${reason || 'check-in'}`);

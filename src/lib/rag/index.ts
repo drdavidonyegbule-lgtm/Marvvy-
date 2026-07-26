@@ -248,29 +248,28 @@ export function searchDocuments(query: string, options?: {
   const opts = options || {};
 
   // Get all chunks
-  let sql = 'SELECT * FROM doc_chunks';
-  const conditions: string[] = [];
-  const params: unknown[] = [];
+  let allChunks = db.prepare('SELECT * FROM doc_chunks').all() as any[];
 
+  // Filter by category if specified
   if (opts.category) {
-    sql = `SELECT dc.* FROM doc_chunks dc
-           JOIN knowledge_articles ka ON dc.document_id = ka.id
-           WHERE ka.category = ?`;
-    params.push(opts.category);
+    allChunks = allChunks.filter((chunk: any) => {
+      const ka = db.prepare('SELECT * FROM knowledge_articles WHERE id = ?').get(chunk.document_id) as any;
+      return ka?.category === opts.category;
+    });
   }
-
-  const allChunks = db.prepare(sql).all(...params) as any[];
 
   if (allChunks.length === 0) {
     // Fallback: search knowledge_articles directly
-    const articles = db.prepare(
-      `SELECT * FROM knowledge_articles
-       WHERE title LIKE ? OR content LIKE ? OR tags LIKE ?
-       LIMIT ?`
-    ).all(`%${query}%`, `%${query}%`, `%${query}%`, maxResults);
+    const allArticles = db.prepare('SELECT * FROM knowledge_articles').all() as any[];
+    const matching = allArticles.filter((a: any) => {
+      const q = query.toLowerCase();
+      return (a.title || '').toLowerCase().includes(q) ||
+             (a.content || '').toLowerCase().includes(q) ||
+             (a.tags || '').toLowerCase().includes(q);
+    }).slice(0, maxResults);
 
-    return (articles as any[]).map((a: any) => ({
-      chunk: a.content.substring(0, 500),
+    return matching.map((a: any) => ({
+      chunk: (a.content || '').substring(0, 500),
       documentTitle: a.title,
       documentId: a.id,
       score: 0.7,
@@ -279,11 +278,10 @@ export function searchDocuments(query: string, options?: {
   }
 
   // TF-IDF scoring
-  const chunkContents = allChunks.map((c: any) => c.content);
+  const chunkContents = allChunks.map((c: any) => c.content || '');
   const scores = computeTFIDF(query, chunkContents);
 
-  // Rank and return top results
-  const scored = allChunks
+  return allChunks
     .map((chunk: any, i: number) => ({
       chunk: chunk.content,
       documentTitle: chunk.metadata ? JSON.parse(chunk.metadata).source : 'Unknown',
@@ -294,8 +292,6 @@ export function searchDocuments(query: string, options?: {
     .filter((s: SearchResult) => s.score > 0)
     .sort((a: SearchResult, b: SearchResult) => b.score - a.score)
     .slice(0, maxResults);
-
-  return scored;
 }
 
 // ─── GET ALL DOCUMENTS ─────────────────────────────────────────
@@ -306,14 +302,16 @@ export function listDocuments(options?: {
 }) {
   const db = getDb();
   const opts = options || {};
-  const sql = opts.category
-    ? 'SELECT * FROM knowledge_articles WHERE category = ? AND source_url IS NOT NULL ORDER BY created_at DESC LIMIT ?'
-    : 'SELECT * FROM knowledge_articles WHERE source_url IS NOT NULL ORDER BY created_at DESC LIMIT ?';
-  const params = opts.category
-    ? [opts.category, opts.limit || 50]
-    : [opts.limit || 50];
+  const allArticles = db.prepare('SELECT * FROM knowledge_articles').all() as any[];
 
-  return db.prepare(sql).all(...params);
+  // Filter in JS: only docs with a source file, optionally by category
+  let filtered = allArticles.filter((a: any) => a.source_url && a.source_url !== 'null');
+  if (opts.category) {
+    filtered = filtered.filter((a: any) => a.category === opts.category);
+  }
+  // Sort by created_at desc
+  filtered.sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  return filtered.slice(0, opts.limit || 50);
 }
 
 export function deleteDocument(id: string) {
