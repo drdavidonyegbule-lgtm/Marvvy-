@@ -147,14 +147,35 @@ export default function SettingsPage() {
         {/* WhatsApp */}
         <div className="glass rounded-xl p-6 mb-6">
           <h3 className="font-medium text-lg mb-4">WhatsApp Business</h3>
+
+          {/* Option 1: Meta Direct */}
+          <div className="border border-emerald-500/30 rounded-xl p-4 mb-4 bg-emerald-500/5">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-medium">RECOMMENDED</span>
+              <p className="font-medium">Meta Cloud API (Direct — No Twilio)</p>
+            </div>
+            <p className="text-xs text-white/50 mb-3">
+              Free tier: 1,000 conversations/month. Connect directly to Meta. No middleman.
+            </p>
+            <div className="space-y-2 text-xs font-mono text-white/40">
+              <div><code className="text-emerald-300">META_WHATSAPP_TOKEN</code> — permanent access token from Meta App</div>
+              <div><code className="text-emerald-300">META_WHATSAPP_PHONE_ID</code> — your WhatsApp phone number ID</div>
+              <div><code className="text-emerald-300">META_WHATSAPP_VERIFY_TOKEN</code> — any string, e.g. "marvvy-webhook"</div>
+            </div>
+            <p className="text-xs text-white/20 mt-3">
+              Webhook URL: <code className="text-emerald-400">https://yourdomain.com/api/webhooks/whatsapp/meta</code>
+            </p>
+          </div>
+
+          {/* Option 2: Twilio */}
           <div className="border border-white/10 rounded-xl p-4">
-            <p className="text-sm text-white/60 mb-3">WhatsApp requires Twilio. Add these to Vercel environment variables:</p>
+            <p className="font-medium mb-2">Via Twilio (Alternative)</p>
             <div className="space-y-2 text-xs font-mono text-white/40">
               <div><code className="text-violet-300">TWILIO_ACCOUNT_SID</code> — your Twilio Account SID</div>
               <div><code className="text-violet-300">TWILIO_AUTH_TOKEN</code> — your Twilio Auth Token</div>
               <div><code className="text-violet-300">TWILIO_WHATSAPP_NUMBER</code> — your WhatsApp sender number</div>
             </div>
-            <p className="text-xs text-white/20 mt-3">Then set webhook in Twilio Console to: https://yourdomain.com/api/webhooks/whatsapp</p>
+            <p className="text-xs text-white/20 mt-2">Webhook: https://yourdomain.com/api/webhooks/whatsapp</p>
           </div>
         </div>
 
