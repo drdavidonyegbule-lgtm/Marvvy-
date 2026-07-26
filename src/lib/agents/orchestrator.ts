@@ -1,5 +1,4 @@
-import { streamText, generateText, stepCountIs } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { streamText, generateText, stepCountIs, type LanguageModel } from 'ai';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '@/lib/db/schema';
 import { getMemoryContext } from '@/lib/memory';
@@ -8,6 +7,30 @@ import { crmAgentTools } from './crm';
 import { opsAgentTools } from './ops';
 import { consultingAgentTools } from './consulting';
 import { searchCompanyDocs } from '@/lib/tools/rag-search';
+
+// ─── LAZY MODEL LOADER ────────────────────────────────────────
+// Don't import openai at module level — load it only when the API is called.
+// This prevents Vercel build failures when OPENAI_API_KEY isn't set.
+
+let _model: LanguageModel | null = null;
+
+async function getModel(): Promise<LanguageModel> {
+  if (_model) return _model;
+
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey || apiKey === 'your-api-key' || apiKey.startsWith('sk-') === false) {
+    throw new Error(
+      'OPENAI_API_KEY environment variable is not set. ' +
+      'Please add it in your Vercel project: Settings → Environment Variables → OPENAI_API_KEY=sk-...'
+    );
+  }
+
+  // Dynamic import so it doesn't fail at build time
+  const { openai: createOpenAI } = await import('@ai-sdk/openai');
+  _model = createOpenAI('gpt-4o');
+  return _model;
+}
 
 // ─── ALL TOOLS ─────────────────────────────────────────────────
 
@@ -115,7 +138,6 @@ export async function processMessage(params: {
     conversationId = uuid();
     const custId = customerId || uuid();
     if (!customerId) {
-      // Guest user — create a temporary profile
       db.prepare(
         'INSERT OR IGNORE INTO customers (id, name, channel_origin) VALUES (?, ?, ?)'
       ).run(custId, 'Guest User', channelType);
@@ -139,12 +161,9 @@ export async function processMessage(params: {
     ? getMemoryContext(conv.customer_id)
     : '';
 
-  // Build system prompt with memory
-  const systemWithMemory = MARVVY_SYSTEM_PROMPT + '\n\n' + memoryContext;
-
   return {
     conversationId,
-    systemPrompt: systemWithMemory,
+    systemPrompt: MARVVY_SYSTEM_PROMPT + '\n\n' + memoryContext,
     messageId,
     db,
   };
@@ -159,15 +178,15 @@ export async function streamMarvvyResponse(params: {
   channelType?: string;
 }) {
   const { conversationId, systemPrompt, messageId, db } = await processMessage(params);
+  const model = await getModel();
 
   const stream = streamText({
-    model: openai('gpt-4o'),
+    model,
     system: systemPrompt,
     messages: [{ role: 'user', content: params.message }],
     tools: allTools,
     stopWhen: stepCountIs(8),
-    onFinish: async ({ text, usage }) => {
-      // Store outbound message
+    onFinish: async ({ text }) => {
       db.prepare(
         `INSERT INTO messages (id, conversation_id, channel_type, direction, content, reflection_score)
          VALUES (?, ?, ?, 'outbound', ?, ?)`
@@ -187,16 +206,16 @@ export async function getMarvvyResponse(params: {
   channelType?: string;
 }) {
   const { conversationId, systemPrompt, messageId, db } = await processMessage(params);
+  const model = await getModel();
 
   const result = await generateText({
-    model: openai('gpt-4o'),
+    model,
     system: systemPrompt,
     messages: [{ role: 'user', content: params.message }],
     tools: allTools,
     stopWhen: stepCountIs(8),
   });
 
-  // Store outbound message
   db.prepare(
     `INSERT INTO messages (id, conversation_id, channel_type, direction, content, tool_calls)
      VALUES (?, ?, ?, 'outbound', ?, ?)`
